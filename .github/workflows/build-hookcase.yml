@@ -8,7 +8,7 @@ jobs:
     runs-on: macos-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -16,24 +16,28 @@ jobs:
       - name: Show Xcode version
         run: xcodebuild -version
 
-      - name: List HookCase schemes
+      - name: List HookCase project
         run: |
           xcodebuild \
             -project HookCase-master/HookCase.xcodeproj \
             -list
 
-      - name: Build HookCase
+      - name: Build HookCase x86_64
         run: |
           xcodebuild \
             -project HookCase-master/HookCase.xcodeproj \
             -scheme HookCase \
             -configuration Release \
+            -destination 'platform=macOS,arch=x86_64' \
+            ARCHS=x86_64 \
+            ONLY_ACTIVE_ARCH=YES \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             build
 
       - name: Find HookCase.kext
         run: |
+          echo "Searching for HookCase.kext..."
           find ~/Library/Developer/Xcode/DerivedData . \
             -name "HookCase.kext" \
             -print
@@ -49,17 +53,30 @@ jobs:
             -quit)"
 
           if [ -z "$KEXT" ]; then
-            KEXT="$(find . -name 'HookCase.kext' -print -quit)"
+            KEXT="$(find . \
+              -name 'HookCase.kext' \
+              -print \
+              -quit)"
           fi
 
           if [ -z "$KEXT" ]; then
-            echo "HookCase.kext not found"
+            echo "HookCase.kext was not found"
             exit 1
           fi
 
+          echo "Found: $KEXT"
           cp -R "$KEXT" artifact/
 
-      - name: Upload artifact
+      - name: Verify HookCase binary
+        run: |
+          echo "Info.plist:"
+          plutil -p artifact/HookCase.kext/Contents/Info.plist
+
+          echo
+          echo "Binary architecture:"
+          file artifact/HookCase.kext/Contents/MacOS/HookCase
+
+      - name: Upload HookCase.kext
         uses: actions/upload-artifact@v4
         with:
           name: HookCase-Release
