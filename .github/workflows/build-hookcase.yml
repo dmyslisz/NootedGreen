@@ -5,13 +5,18 @@ on:
 
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: macos-15-intel
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      - name: Show machine architecture
+        run: |
+          uname -m
+          sysctl -n machdep.cpu.brand_string || true
 
       - name: Show Xcode version
         run: xcodebuild -version
@@ -28,7 +33,6 @@ jobs:
             -project HookCase-master/HookCase.xcodeproj \
             -scheme HookCase \
             -configuration Release \
-            -destination 'platform=macOS,arch=x86_64' \
             ARCHS=x86_64 \
             ONLY_ACTIVE_ARCH=YES \
             CODE_SIGNING_ALLOWED=NO \
@@ -67,14 +71,18 @@ jobs:
           echo "Found: $KEXT"
           cp -R "$KEXT" artifact/
 
-      - name: Verify HookCase binary
+      - name: Verify HookCase
         run: |
           echo "Info.plist:"
           plutil -p artifact/HookCase.kext/Contents/Info.plist
 
           echo
-          echo "Binary architecture:"
+          echo "Binary:"
           file artifact/HookCase.kext/Contents/MacOS/HookCase
+
+          echo
+          echo "Architectures:"
+          lipo -archs artifact/HookCase.kext/Contents/MacOS/HookCase
 
       - name: Upload HookCase.kext
         uses: actions/upload-artifact@v4
