@@ -1,0 +1,74 @@
+name: Build NootedGreen
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: List schemes
+        run: |
+          xcodebuild \
+            -project NootedGreen.xcodeproj \
+            -list
+
+      - name: Build NootedGreen
+        run: |
+          xcodebuild \
+            -project NootedGreen.xcodeproj \
+            -scheme NootedGreen \
+            -configuration Release \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Find built kext
+        run: |
+          echo "Searching for NootedGreen.kext..."
+          find . ~/Library/Developer/Xcode/DerivedData \
+            -name "NootedGreen.kext" \
+            -print
+
+      - name: Prepare artifact
+        run: |
+          mkdir -p artifact
+
+          KEXT="$(find ~/Library/Developer/Xcode/DerivedData \
+            -name 'NootedGreen.kext' \
+            -path '*Release*' \
+            -print \
+            -quit)"
+
+          if [ -z "$KEXT" ]; then
+            KEXT="$(find . \
+              -name 'NootedGreen.kext' \
+              -print \
+              -quit)"
+          fi
+
+          if [ -z "$KEXT" ]; then
+            echo "NootedGreen.kext was not found"
+            exit 1
+          fi
+
+          echo "Found: $KEXT"
+          cp -R "$KEXT" artifact/
+
+      - name: Upload NootedGreen.kext
+        uses: actions/upload-artifact@v4
+        with:
+          name: NootedGreen-Release
+          path: artifact/NootedGreen.kext
