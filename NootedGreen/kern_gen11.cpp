@@ -1022,6 +1022,64 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		}
 
 		const bool wegCoexist = isWEGCoexistMode();
+				// TEMP DIAGNOSTIC:
+		// IGAccelTask::withOptions calls release() when initWithOptions() returns false.
+		// On our real TGL this release path page-faults before we can see why init failed.
+		//
+		// Patch ONLY this exact Apple TGL withOptions implementation:
+		//   call initWithOptions
+		//   test al
+		//   jne success
+		//   ...
+		//   call [vtable+0x28]  <-- release(), NOP for diagnostic
+		//   xor ebx,ebx        <-- return nullptr normally
+		//
+		// This leaks the failed temporary task, so DO NOT keep this patch permanently.
+		
+		static const uint8_t fTGLTaskFailedRelease[] = {
+		    0x55,0x48,0x89,0xE5,0x41,0x56,0x53,0x49,
+		    0x89,0xFE,0x48,0x8B,0x05,0xF3,0x2D,0x14,
+		    0x00,0x48,0x8D,0x3D,0xEC,0x2D,0x14,0x00,
+		    0xFF,0x90,0x88,0x00,0x00,0x00,0x48,0x89,
+		    0xC3,0x48,0x85,0xC0,0x74,0x1A,0x48,0x89,
+		    0xDF,0x4C,0x89,0xF6,0xE8,0x17,0x00,0x00,
+		    0x00,0x84,0xC0,0x75,0x0B,0x48,0x8B,0x03,
+		    0x48,0x89,0xDF,0xFF,0x50,0x28,0x31,0xDB
+		};
+		
+		static const uint8_t rTGLTaskFailedRelease[] = {
+		    0x55,0x48,0x89,0xE5,0x41,0x56,0x53,0x49,
+		    0x89,0xFE,0x48,0x8B,0x05,0xF3,0x2D,0x14,
+		    0x00,0x48,0x8D,0x3D,0xEC,0x2D,0x14,0x00,
+		    0xFF,0x90,0x88,0x00,0x00,0x00,0x48,0x89,
+		    0xC3,0x48,0x85,0xC0,0x74,0x1A,0x48,0x89,
+		    0xDF,0x4C,0x89,0xF6,0xE8,0x17,0x00,0x00,
+		    0x00,0x84,0xC0,0x75,0x0B,0x48,0x8B,0x03,
+		    0x48,0x89,0xDF,0x90,0x90,0x90,0x31,0xDB
+		};
+		
+		LookupPatchPlus const realTGLTaskDiagPatches[] = {
+		    {
+		        activeKext,
+		        fTGLTaskFailedRelease,
+		        rTGLTaskFailedRelease,
+		        arrsize(fTGLTaskFailedRelease),
+		        1
+		    },
+		};
+		
+		PANIC_COND(
+		    !LookupPatchPlus::applyAll(
+		        patcher,
+		        realTGLTaskDiagPatches,
+		        address,
+		        size
+		    ),
+		    "ngreen",
+		    "TGLTASK: failed to patch failed-task release"
+		);
+		
+		SYSLOG("ngreen", "TGLTASK: failed-task release diagnostic patch applied");
 		const bool forceFullMTL = shouldForceFullMetalPath();
 
 		RouteRequestPlus requests[] = {
@@ -1056,6 +1114,23 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 
 			 // V132: Hook task producers so submitBlit never sees a null IGAccelTask on spoofed RPL.
 			 {"__ZN16IntelAccelerator17createUserGPUTaskEv", createUserGPUTask, this->ocreateUserGPUTask},
+			 {"__ZN11IGAccelTask15initWithOptionsEP16IntelAccelerator",
+			    dbgTaskInitWithOptions, this->oDbgTaskInitWithOptions},
+			
+			{"__ZN11IGAccelTask14initAllocatorsEP16IntelAccelerator",
+			    dbgTaskInitAllocators, this->oDbgTaskInitAllocators},
+			
+			{"__ZN11IGAccelTask24initManagedPageTableListEv",
+			    dbgTaskInitManagedPageTableList, this->oDbgTaskInitManagedPageTableList},
+			
+			{"__ZN11IGAccelTask24initStampAndScratchPagesEv",
+			    dbgTaskInitStampAndScratchPages, this->oDbgTaskInitStampAndScratchPages},
+			
+			{"__ZN15IGMemoryManager19newPageTableForTaskEP11IGAccelTask",
+			    dbgNewPageTableForTask, this->oDbgNewPageTableForTask},
+			
+			{"__ZN14IGAuxPageTable11withOptionsEP16IntelAcceleratorP11IGAccelTask",
+			    dbgAuxPageTableWithOptions, this->oDbgAuxPageTableWithOptions},
 			 {"__ZN11IGAccelTask11withOptionsEP16IntelAccelerator", igAccelTaskWithOptions, this->oigAccelTaskWithOptions},
 
 			 // V36: Hook readAndClearInterrupts to initialize Gen11 multi-engine GT interrupts.
@@ -5195,6 +5270,119 @@ void *Gen11::createUserGPUTask(void *that)
 
 	SYSLOG("ngreen", "V132: createUserGPUTask returned null, no fallback task available");
 	return nullptr;
+}
+
+bool Gen11::dbgTaskInitAllocators(void *that, void *accel) {
+    bool ret = FunctionCast(
+        dbgTaskInitAllocators,
+        callback->oDbgTaskInitAllocators
+    )(that, accel);
+
+    SYSLOG(
+        "ngreen",
+        "TGLTASK: initAllocators ret=%d task=%p accel=%p alloc0=%p alloc1=%p",
+        ret,
+        that,
+        accel,
+        getMember<void *>(that, 0x2C8),
+        getMember<void *>(that, 0x2D0)
+    );
+
+    return ret;
+}
+
+void *Gen11::dbgNewPageTableForTask(void *that, void *task) {
+    void *ret = FunctionCast(
+        dbgNewPageTableForTask,
+        callback->oDbgNewPageTableForTask
+    )(that, task);
+
+    SYSLOG(
+        "ngreen",
+        "TGLTASK: newPageTableForTask ret=%p mm=%p task=%p",
+        ret,
+        that,
+        task
+    );
+
+    return ret;
+}
+
+bool Gen11::dbgTaskInitManagedPageTableList(void *that) {
+    bool ret = FunctionCast(
+        dbgTaskInitManagedPageTableList,
+        callback->oDbgTaskInitManagedPageTableList
+    )(that);
+
+    SYSLOG(
+        "ngreen",
+        "TGLTASK: initManagedPageTableList ret=%d task=%p",
+        ret,
+        that
+    );
+
+    return ret;
+}
+
+bool Gen11::dbgTaskInitStampAndScratchPages(void *that) {
+    bool ret = FunctionCast(
+        dbgTaskInitStampAndScratchPages,
+        callback->oDbgTaskInitStampAndScratchPages
+    )(that);
+
+    SYSLOG(
+        "ngreen",
+        "TGLTASK: initStampAndScratchPages ret=%d task=%p",
+        ret,
+        that
+    );
+
+    return ret;
+}
+
+void *Gen11::dbgAuxPageTableWithOptions(void *accel, void *task) {
+    void *ret = FunctionCast(
+        dbgAuxPageTableWithOptions,
+        callback->oDbgAuxPageTableWithOptions
+    )(accel, task);
+
+    SYSLOG(
+        "ngreen",
+        "TGLTASK: IGAuxPageTable::withOptions ret=%p accel=%p task=%p",
+        ret,
+        accel,
+        task
+    );
+
+    return ret;
+}
+
+bool Gen11::dbgTaskInitWithOptions(void *that, void *accel) {
+    SYSLOG(
+        "ngreen",
+        "TGLTASK: >>> initWithOptions task=%p accel=%p",
+        that,
+        accel
+    );
+
+    bool ret = FunctionCast(
+        dbgTaskInitWithOptions,
+        callback->oDbgTaskInitWithOptions
+    )(that, accel);
+
+    SYSLOG(
+        "ngreen",
+        "TGLTASK: <<< initWithOptions ret=%d task=%p "
+        "pageTable=%p auxTable=%p alloc0=%p alloc1=%p",
+        ret,
+        that,
+        getMember<void *>(that, 0x260),
+        getMember<void *>(that, 0x278),
+        getMember<void *>(that, 0x2C8),
+        getMember<void *>(that, 0x2D0)
+    );
+
+    return ret;
 }
 
 void *Gen11::igAccelTaskWithOptions(void *that)
