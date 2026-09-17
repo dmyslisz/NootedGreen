@@ -1387,6 +1387,25 @@ private:
 
 	static void *igAccelTaskWithOptions(void *that);  // V132: cache successful task allocations for null-task fallback
 	mach_vm_address_t oigAccelTaskWithOptions {};
+	// Real-TGL IGAccelTask diagnostic hooks
+	static bool dbgTaskInitWithOptions(void *that, void *accel);
+	mach_vm_address_t oDbgTaskInitWithOptions {};
+	
+	static bool dbgTaskInitAllocators(void *that, void *accel);
+	mach_vm_address_t oDbgTaskInitAllocators {};
+	
+	static bool dbgTaskInitManagedPageTableList(void *that);
+	mach_vm_address_t oDbgTaskInitManagedPageTableList {};
+	
+	static bool dbgTaskInitStampAndScratchPages(void *that);
+	mach_vm_address_t oDbgTaskInitStampAndScratchPages {};
+	
+	static void *dbgNewPageTableForTask(void *that, void *task);
+	mach_vm_address_t oDbgNewPageTableForTask {};
+	
+	static void *dbgAuxPageTableWithOptions(void *accel, void *task);
+	mach_vm_address_t oDbgAuxPageTableWithOptions {};
+	//end of debug
 	
 	static unsigned long submitBlit(void *that, void *param_1, void *param_2, void *param_3, bool param_4);
 	mach_vm_address_t osubmitBlit {};
